@@ -15,7 +15,7 @@ for each hour the forecast quantiles are the weighted empirical quantiles of the
 comparables' log-ratios ln(viewers_h / viewers_1). The median follows the typical
 diurnal curve -- a dip through the night hours, a rise into the evening -- and the
 spread is the honest cross-launch spread, which is what pinball loss rewards.
-Two refinements, each adopted only after it improved leave-one-out
+Three refinements, each adopted only after it improved leave-one-out
 cross-validation over the kit's past launches on every slice (overall, big
 hour-1, console-only, big+console):
   - a shrunk local-linear slope: per hour, the log-ratio's slope on
@@ -30,11 +30,18 @@ hour-1, console-only, big+console):
     whose midnight dip resembles the target's count slightly more. It helps
     console-only launches most and is ~neutral elsewhere; narrower bandwidths
     hurt the big regime, so it stays gentle.
+  - a log-ratio spread multiplier of 0.95 around the median: leave-one-out
+    improved on all slices (overall 0.3938 to 0.3937, big 0.2045 to 0.2042,
+    console 0.2149 to 0.2118, big+console 0.1698 to 0.1671). The console slice
+    over-covers (0.951 vs 0.90 nominal), so a slightly narrower spread is
+    better calibrated. Hours without comparables keep the fallback spread.
 What was tried and rejected by the same leave-one-out test: a momentum kernel
 on the pre-release slope, shifting the median by the dip, a viewer/channel
-ratio kernel, console-only filtering or upweighting, narrowing the spreads,
-and changing the scale bandwidth. Comparables without a usable release day (no
-hour-1 print, or fewer than 20 of the 24 release-day hours) are skipped; with
+ratio kernel, console-only filtering or upweighting, wider spreads and the
+coarse 0.90 spread step in the first grid, and changing the scale bandwidth.
+The finer 0.93-0.97 spread band improves all slices, with 0.95 adopted.
+Comparables without a usable release day (no hour-1 print, or fewer than 20
+of the 24 release-day hours) are skipped; with
 no usable comparable at all, the forecast falls back to flat persistence with
 a widening lognormal spread.
 
@@ -80,9 +87,9 @@ OUTPUT_DIR = Path(os.environ.get("MAKEFUN_OUTPUT_DIR", "/output"))
 
 # Gaussian kernel bandwidth on log hour-1 size: one e-fold of weight per factor
 # of e in hour-1 viewers. Calibrated by leave-one-out cross-validation over the
-# kit's 37 usable past launches (mean pinball loss 0.3938, vs 0.9297 for the
-# flat house baseline; 0.2045 vs 0.2509 on the big hour-1 launches that
-# resemble GTA VI; 0.2149 on console-only launches).
+# kit's 37 usable past launches (mean pinball loss 0.3937, vs 0.9297 for the
+# flat house baseline; 0.2042 vs 0.2509 on the big hour-1 launches that
+# resemble GTA VI; 0.2118 on console-only launches; 0.1671 on big+console).
 BANDWIDTH = 1.0
 # Local-linear slope shrinkage: the slope's weight is neff / (neff + k), so a
 # slope fitted on a thin effective sample is pulled hard toward zero.
@@ -90,6 +97,11 @@ SLOPE_SHRINK = 20.0
 # Dip kernel bandwidth on ln(hour-1 / pre-release 6h peak): deliberately wide,
 # so the dip only tilts the weights instead of selecting on them.
 DIP_BANDWIDTH = 3.0
+# Log-ratio spread multiplier around the median; adopted after LOO improved
+# all slices: overall 0.3938 to 0.3937, big 0.2045 to 0.2042, console 0.2149
+# to 0.2118, big+console 0.1698 to 0.1671. Console over-covers (0.951 vs 0.90
+# nominal), so a slightly narrower spread is better calibrated.
+SPREAD = 0.95
 # A comparable only counts if its release day is nearly complete.
 MIN_RELEASE_HOURS = 20
 # Fallback spread (flat persistence), as in the house baseline: log-sigma per
@@ -249,6 +261,9 @@ def hour_quantiles(p1: float, h: int, levels: list, records: list,
         beta *= neff / (neff + SLOPE_SHRINK) if neff > 0 else 0.0
         corrected = [(r + beta * (log_p1 - x), w) for r, w, x in pairs]
         ratios = [weighted_quantile(corrected, tau) for tau in levels]
+        med = ratios[2]
+        if SPREAD != 1.0:
+            ratios = [med + (r - med) * SPREAD for r in ratios]
         values = [p1 * math.exp(ratio) for ratio in ratios]
     else:
         # No comparable has this hour: flat persistence, spread widening with
